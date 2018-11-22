@@ -10,10 +10,10 @@
 #include <stdint.h>
 #include <math.h>
 
-#define MAXIN 30
-#define MAXDN 300
+#define MAXIN 1000
+#define MAXDN 10000
 #define INDISKSZ 512
-#define DNDISKSZ 256
+#define DNDISKSZ 1024
 #define DPERN 10
 
 const int DISKSIZE = (MAXIN + MAXDN) + (MAXIN * INDISKSZ) + (MAXDN * DNDISKSZ);
@@ -44,11 +44,6 @@ char *IBMAP;
 char *DBMAP;
 unsigned long int IN = 0;
 
-const mode_t USR_NPF = S_IRUSR | S_IWUSR;
-const mode_t GRP_NPF = S_IRGRP | S_IWGRP;
-const mode_t USR_NPD = S_IRUSR | S_IWUSR | S_IFDIR;
-const mode_t GRP_NPD = S_IRGRP | S_IWGRP | S_IFDIR;
-
 void openDisk();
 void closeDisk();
 int delNode(char *);
@@ -72,6 +67,7 @@ INODE * initializeNode(char *, char *, char, INODE *);
 
 int ti_rmdir(const char *);
 int ti_unlink(const char *);
+int ti_link(const char *, const char *);
 int ti_access(const char *, int);
 int ti_chmod(const char *, mode_t );
 int ti_mkdir(const char *, mode_t );
@@ -80,6 +76,7 @@ int ti_mknod(const char *, mode_t, dev_t);
 int ti_getattr(const char *, struct stat *);
 int ti_utime(const char *, struct utimbuf *);
 int ti_open(const char *, struct fuse_file_info *);
+int ti_create(const char *, mode_t , struct fuse_file_info *);
 int ti_read(const char *, char *, size_t , off_t ,struct fuse_file_info *);
 int ti_write(const char *, const char *, size_t , off_t , struct fuse_file_info *);
 int ti_readdir(const char *, void *, fuse_fill_dir_t , off_t , struct fuse_file_info *);
@@ -87,12 +84,14 @@ int ti_readdir(const char *, void *, fuse_fill_dir_t , off_t , struct fuse_file_
 static struct fuse_operations operations = {
 	.open       = ti_open,
 	.read       = ti_read,
+	.link       = ti_link,
 	.mkdir      = ti_mkdir,
 	.rmdir      = ti_rmdir,
 	.mknod      = ti_mknod,
 	.write      = ti_write,
 	.utime      = ti_utime,
 	.chmod      = ti_chmod,
+	.create     = ti_create,
 	.access     = ti_access,
 	.unlink     = ti_unlink,
 	.getattr    = ti_getattr,
@@ -289,7 +288,6 @@ INODE * getInode(int ino){
 	return(toret);
 }
 
-
 char * reverse(char * str, int mode){
 	int len = strlen(str);
 	char * retval = (char *)calloc(sizeof(char), (len + 1));
@@ -327,7 +325,6 @@ char * getName(char ** copy_path){
 	return(retval);
 }
 
-
 char * getDir(char * apath){
 	char *path = (char*)malloc(sizeof(char)*strlen(apath));
 	strcpy(path, apath);
@@ -337,7 +334,6 @@ char * getDir(char * apath){
 	free(path);
 	return(reverse(dirp, 0));
 }
-
 
 INODE * getNodeFromPath(char * apath, INODE *parent){
 	int i;
@@ -356,7 +352,6 @@ INODE * getNodeFromPath(char * apath, INODE *parent){
 	}
 	return(NULL);
 }
-
 
 int delNode(char *apath){
 	int i, j, flag = 0, dsize, doff;
@@ -404,7 +399,6 @@ int addNode(char * apath, char type){
 	return(0);
 }
 
-
 INODE * initializeNode( char *path, char *name, char type, INODE *parent){
 	INODE *ret = (INODE*)malloc(sizeof(INODE));
 	strcpy(ret->path, path);
@@ -424,7 +418,6 @@ INODE * initializeNode( char *path, char *name, char type, INODE *parent){
 	ret->data = NULL;
 	return(ret);
 }
-
 
 void initializeTIFS(INODE **rt){
 	IBMAP = (char*)malloc(sizeof(char)*(MAXIN));
@@ -532,13 +525,27 @@ int ti_truncate(const char *apath, off_t size){
 
 
 int ti_chmod(const char *apath, mode_t new){
-	if(apath == NULL) return(-ENOENT);
-	INODE * nd = getNodeFromPath((char *) apath, ROOT);
-	if(nd == NULL) return(-ENOENT);
-	nd->m_time = time(NULL);
-	nd->permissions = new;
-	storeInode(nd);
-	return(0);
+    if(apath == NULL) return(-ENOENT);
+    INODE * nd = getNodeFromPath((char *) apath, ROOT);
+    if(nd == NULL) return(-ENOENT);
+    nd->m_time = time(NULL);
+    nd->permissions = new;
+    storeInode(nd);
+    return(0);
+}
+
+
+int ti_link(const char *oldp, const char *newp){
+    INODE *old = getNodeFromPath((char *) oldp, ROOT);
+    if(old == NULL) return(-ENOENT);
+    addNode((char*) newp, old->type);
+    INODE *new = getNodeFromPath((char *) newp, ROOT);
+    old->num_children += 1;
+    new->data = (char *)malloc(sizeof(char)*(strlen(old->data)+1));
+    strcpy(new->data, old->data);
+    storeInode(old);
+    storeInode(new);
+    return(0);
 }
 
 
@@ -571,5 +578,6 @@ int ti_rmdir(const char * apath){return(delNode((char *) apath));}
 int ti_unlink(const char *apath){return(delNode((char *) apath));}
 int ti_mkdir(const char * apath, mode_t x){return(addNode((char*) apath, 'd'));}
 int ti_mknod(const char * apath, mode_t x, dev_t y){return(addNode((char*) apath, 'f'));}
+int ti_create(const char *apath, mode_t mode, struct fuse_file_info *fi){return(addNode((char*) apath, 'f'));}
 
-int main( int argc, char *argv[] ){initializeTIFS(&ROOT);return fuse_main(argc, argv, &operations);}
+int main(int argc, char *argv[]){initializeTIFS(&ROOT);return fuse_main(argc, argv, &operations);}
